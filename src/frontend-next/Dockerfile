@@ -1,47 +1,42 @@
-# ビルドステージ
+# ------------ ビルドステージ ------------
 FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# 依存関係をコピーしてインストール
-COPY package.json package-lock.json ./
+# 依存関係 (package*.json) と tsconfig.json を先にコピー
+# これらのみをコピーすることで、ライブラリインストールのレイヤーをキャッシュ化
+COPY package.json package-lock.json tsconfig.json ./
+
+# 依存関係インストール
 RUN npm ci
 
-# ソースコードをコピー
+# 残りのソースコードをコピー
 COPY . .
 
-# next.config.tsをnext.config.jsにリネーム
-# RUN if [ -f next.config.ts ]; then mv next.config.ts next.config.js; fi
-
-# アプリケーションをビルド
+# Next.js のビルド（tsconfig.json があると自動的にTypeScript対応ビルド）
 RUN npm run build
 
-# 実行ステージ
+
+# ------------ 実行ステージ ------------
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# 本番環境用の環境変数を設定
+# 本番用の環境変数
 ENV NODE_ENV=production
 
-# non-root ユーザーを作成
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
-
-# 必要なファイルだけをコピー
+# 必要なファイルをビルドステージからコピー
+COPY --from=build /app/package.json ./
+COPY --from=build /app/package-lock.json ./
+COPY --from=build /app/next.config.* ./
 COPY --from=build /app/public ./public
-COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=build /app/.next ./.next
 
-# ユーザーを変更
-USER nextjs
+# 本番環境用依存関係のみインストール (devDependencies除外)
+RUN npm ci --omit=dev
 
-# ポート3000を公開
+# ポート 3000 を公開
 EXPOSE 3000
 
-# 環境変数を設定
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
-
-# サーバーを起動
-CMD ["node", "server.js"] 
+# アプリケーションを起動
+CMD ["npm", "start"]
