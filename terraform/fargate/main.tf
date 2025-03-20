@@ -213,6 +213,7 @@ resource "aws_ecs_task_definition" "backend_task" {
       essential = true
       portMappings = [
         {
+          name          = "backend-port"
           containerPort = 8000
           hostPort      = 8000
           protocol      = "tcp"
@@ -249,6 +250,7 @@ resource "aws_ecs_task_definition" "frontend_task" {
       essential = true
       portMappings = [
         {
+          name          = "frontend-port"
           containerPort = 3000
           hostPort      = 3000
           protocol      = "tcp"
