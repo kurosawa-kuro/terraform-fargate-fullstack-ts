@@ -1,28 +1,25 @@
 #########################################
-# プロバイダ設定 & ローカル変数
+# プロバイダ & ローカル変数
 #########################################
 provider "aws" {
-  region = "ap-northeast-1"  # 東京リージョン
+  region = "ap-northeast-1"
 }
 
 locals {
-  prefix        = "api-8000-public-01"
-  account_id    = "503561449641"
-  region        = "ap-northeast-1"
-  # バックエンドとフロントエンドのDockerイメージ
+  prefix         = "fullstack-public-01"
+  account_id     = "503561449641"
+  region         = "ap-northeast-1"
+
   backend_image  = "kurosawakuro/backend-express-8000"
   frontend_image = "kurosawakuro/frontend-nextjs-3000"
 
-  # SSMパラメータのプレフィックス
   ssm_prefix = "/${local.prefix}"
 
-  # 1.1 サブネット作成用に AZ と CIDR をまとめる
   public_subnets = {
     a = "10.0.1.0/24"
     c = "10.0.2.0/24"
   }
-  
-  # SSM パラメータのARNリスト
+
   ssm_parameter_keys = [
     "BACKEND_PORT",
     "FRONTEND_PORT",
@@ -34,14 +31,7 @@ locals {
 }
 
 #########################################
-# ECS クラスタ
-#########################################
-resource "aws_ecs_cluster" "default" {
-  name = "${local.prefix}-cluster"
-}
-
-#########################################
-# ネットワーク (VPC, Subnet, IGW, RouteTable)
+# VPC, Subnet, IGW, RouteTable
 #########################################
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
@@ -61,7 +51,6 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# サブネット (for_eachで複数作成)
 resource "aws_subnet" "public" {
   for_each = local.public_subnets
 
@@ -75,7 +64,6 @@ resource "aws_subnet" "public" {
   }
 }
 
-# Public Route Table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -89,7 +77,6 @@ resource "aws_route_table" "public" {
   }
 }
 
-# サブネットとルートテーブルの関連付け (for_each)
 resource "aws_route_table_association" "public" {
   for_each = aws_subnet.public
 
@@ -98,13 +85,32 @@ resource "aws_route_table_association" "public" {
 }
 
 #########################################
-# セキュリティグループ
+# セキュリティグループ (1つのみ)
 #########################################
 resource "aws_security_group" "ecs_sg" {
   name        = "${local.prefix}-ecs-sg"
-  description = "Allow inbound traffic from ALB only"
+  description = "Allow inbound on ports 3000(front) & 8000(backend)"
   vpc_id      = aws_vpc.main.id
 
+  # バックエンド用(8000)を開放
+  ingress {
+    description = "Allow inbound on port 8000"
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # フロントエンド用(3000)を開放
+  ingress {
+    description = "Allow inbound on port 3000"
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # 全ての外向き通信を許可
   egress {
     from_port   = 0
     to_port     = 0
@@ -117,50 +123,16 @@ resource "aws_security_group" "ecs_sg" {
   }
 }
 
-resource "aws_security_group" "alb_sg" {
-  name        = "${local.prefix}-alb-sg"
-  description = "Allow inbound traffic on HTTP"
-  vpc_id      = aws_vpc.main.id
+#########################################
+# ECS クラスタ
+#########################################
+resource "aws_ecs_cluster" "default" {
+  name = "${local.prefix}-cluster"
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # サービスディスカバリー用の設定
+  service_connect_defaults {
+    namespace = aws_service_discovery_http_namespace.services.arn
   }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${local.prefix}-alb-sg"
-  }
-}
-
-# ALBからバックエンド(8000)への通信許可
-resource "aws_security_group_rule" "allow_alb_to_ecs_backend" {
-  type                     = "ingress"
-  from_port                = 8000
-  to_port                  = 8000
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.ecs_sg.id
-  source_security_group_id = aws_security_group.alb_sg.id
-  description              = "Allow traffic from ALB to ECS container(backend)"
-}
-
-# ALBからフロントエンド(3000)への通信許可
-resource "aws_security_group_rule" "allow_alb_to_ecs_frontend" {
-  type                     = "ingress"
-  from_port                = 3000
-  to_port                  = 3000
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.ecs_sg.id
-  source_security_group_id = aws_security_group.alb_sg.id
-  description              = "Allow traffic from ALB to ECS container(frontend)"
 }
 
 #########################################
@@ -188,8 +160,9 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# SSM パラメータアクセス用のポリシー
+# SSM パラメータアクセス用 (必要に応じて)
 data "aws_iam_policy" "ssm_parameter_access" {
+  # ここはユーザー定義ポリシー or AWS管理ポリシーに合わせる
   name = "${local.prefix}-ssm-parameter-access"
 }
 
@@ -214,9 +187,7 @@ resource "aws_cloudwatch_log_group" "frontend_logs" {
 #########################################
 # ECS Task Definition (コンテナ設定)
 #########################################
-# SSM パラメータを secrets として渡す
 locals {
-  # タスク定義に渡す secrets を動的リスト化
   container_secrets = [
     for key in local.ssm_parameter_keys : {
       name      = key
@@ -225,15 +196,13 @@ locals {
   ]
 }
 
-#########################################
-# ECS Task Definition (バックエンド)
-#########################################
+# バックエンド Task
 resource "aws_ecs_task_definition" "backend_task" {
   family                   = "${local.prefix}-backend-task"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = 256
+  memory                   = 512
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_execution_role.arn
 
@@ -242,7 +211,6 @@ resource "aws_ecs_task_definition" "backend_task" {
       name      = "backend"
       image     = local.backend_image
       essential = true
-
       portMappings = [
         {
           containerPort = 8000
@@ -250,7 +218,6 @@ resource "aws_ecs_task_definition" "backend_task" {
           protocol      = "tcp"
         }
       ]
-
       secrets = local.container_secrets
 
       logConfiguration = {
@@ -265,15 +232,13 @@ resource "aws_ecs_task_definition" "backend_task" {
   ])
 }
 
-#########################################
-# ECS Task Definition (フロントエンド)
-#########################################
+# フロントエンド Task
 resource "aws_ecs_task_definition" "frontend_task" {
   family                   = "${local.prefix}-frontend-task"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = 256
+  memory                   = 512
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_execution_role.arn
 
@@ -282,7 +247,6 @@ resource "aws_ecs_task_definition" "frontend_task" {
       name      = "frontend"
       image     = local.frontend_image
       essential = true
-
       portMappings = [
         {
           containerPort = 3000
@@ -290,9 +254,15 @@ resource "aws_ecs_task_definition" "frontend_task" {
           protocol      = "tcp"
         }
       ]
-
-      # フロントでSSMを使うなら secrets を指定
       secrets = local.container_secrets
+      
+      # バックエンドAPIのURL
+      environment = [
+        {
+          name  = "API_URL"
+          value = "http://${local.prefix}-backend-service:8000"
+        }
+      ]
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -307,104 +277,6 @@ resource "aws_ecs_task_definition" "frontend_task" {
 }
 
 #########################################
-# ALB (LB / TG / Listener)
-#########################################
-resource "aws_lb" "app_alb" {
-  name               = "${local.prefix}-alb"
-  load_balancer_type = "application"
-  # for_each サブネットのIDを配列化
-  subnets            = values(aws_subnet.public)[*].id
-  security_groups    = [aws_security_group.alb_sg.id]
-
-  tags = {
-    Name = "${local.prefix}-alb"
-  }
-
-  timeouts {
-    create = "20m"
-    update = "20m"
-    delete = "20m"
-  }
-}
-
-# バックエンド用ターゲットグループ(ポート8000)
-resource "aws_lb_target_group" "backend_tg" {
-  name        = "${local.prefix}-backend-tg"
-  port        = 8000
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
-
-  health_check {
-    protocol            = "HTTP"
-    path                = "/"
-    port                = "traffic-port"
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-  }
-
-  tags = {
-    Name = "${local.prefix}-backend-tg"
-  }
-}
-
-# フロントエンド用ターゲットグループ(ポート3000)
-resource "aws_lb_target_group" "frontend_tg" {
-  name        = "${local.prefix}-frontend-tg"
-  port        = 3000
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
-
-  health_check {
-    protocol            = "HTTP"
-    path                = "/"  # Next.jsのヘルスチェックパス
-    port                = "traffic-port"
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-  }
-
-  tags = {
-    Name = "${local.prefix}-frontend-tg"
-  }
-}
-
-# ALBのリスナー(ポート80)
-resource "aws_lb_listener" "http_listener" {
-  load_balancer_arn = aws_lb.app_alb.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  # デフォルトアクション: フロントエンドへ転送
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.frontend_tg.arn
-  }
-}
-
-# バックエンドに振り分けるためのルール
-# `/api/*` へアクセスが来た場合に backend_tg へ
-resource "aws_lb_listener_rule" "backend_rule" {
-  listener_arn = aws_lb_listener.http_listener.arn
-  priority     = 10
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend_tg.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/api/*"]
-    }
-  }
-}
-
-#########################################
 # ECS Service (バックエンド)
 #########################################
 resource "aws_ecs_service" "backend_service" {
@@ -414,22 +286,25 @@ resource "aws_ecs_service" "backend_service" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # サービスディスカバリー設定
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.services.arn
+    service {
+      port_name      = "backend-port"
+      discovery_name = "${local.prefix}-backend-service"
+      client_alias {
+        port     = 8000
+        dns_name = "${local.prefix}-backend-service"
+      }
+    }
+  }
+
   network_configuration {
     subnets          = values(aws_subnet.public)[*].id
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.backend_tg.arn
-    container_name   = "backend"
-    container_port   = 8000
-  }
-
-  depends_on = [
-    aws_lb_listener.http_listener,
-    aws_lb_listener_rule.backend_rule
-  ]
 }
 
 #########################################
@@ -442,32 +317,50 @@ resource "aws_ecs_service" "frontend_service" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # サービスディスカバリー設定
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.services.arn
+    service {
+      port_name      = "frontend-port"
+      discovery_name = "${local.prefix}-frontend-service"
+      client_alias {
+        port     = 3000
+        dns_name = "${local.prefix}-frontend-service"
+      }
+    }
+  }
+
   network_configuration {
     subnets          = values(aws_subnet.public)[*].id
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
+}
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.frontend_tg.arn
-    container_name   = "frontend"
-    container_port   = 3000
+#########################################
+# アウトプット (注意: 動的に変わる可能性あり)
+#########################################
+output "backend_service_info" {
+  description = "Backend ECS service details"
+  value = {
+    service_name    = aws_ecs_service.backend_service.name
+    task_definition = aws_ecs_service.backend_service.task_definition
+    # ECSタスクのPublic IPは可変なので、安定して参照できません
+    # ここではサービス名などを出力し、アクセス確認は後述
   }
-
-  depends_on = [
-    aws_lb_listener.http_listener
-  ]
 }
 
-#########################################
-# アウトプット
-#########################################
-output "service_frontend_url" {
-  value       = "http://${aws_lb.app_alb.dns_name}"
-  description = "ALBのDNS名（フロントエンド）"
+output "frontend_service_info" {
+  description = "Frontend ECS service details"
+  value = {
+    service_name    = aws_ecs_service.frontend_service.name
+    task_definition = aws_ecs_service.frontend_service.task_definition
+  }
 }
 
-output "service_backend_url_example" {
-  value       = "http://${aws_lb.app_alb.dns_name}/api"
-  description = "バックエンドへの呼び出し例(/api)"
+# サービスディスカバリー名前空間
+resource "aws_service_discovery_http_namespace" "services" {
+  name        = "${local.prefix}-namespace"
+  description = "Service discovery namespace for ECS services"
 }

@@ -6,7 +6,7 @@ provider "aws" {
 }
 
 locals {
-  prefix        = "api-8000-public-01"
+  prefix        = "fullstack-public-01"
   account_id    = "503561449641"
   region        = "ap-northeast-1"
 
