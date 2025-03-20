@@ -1,0 +1,45 @@
+# APIテスト用設定
+# ===========================================
+
+# 環境変数
+@localHost = localhost
+@localPort = 3000
+@localUrl = http://{{localHost}}:{{localPort}}
+
+@publicIP = 35.72.14.6
+@publicPort = 3000
+@publicUrl = http://{{publicIP}}:{{publicPort}}
+
+@serviceUrl = http://api-8000-public-01-alb-1080861172.ap-northeast-1.elb.amazonaws.com
+
+# ===========================================
+# 基本アクセステスト
+# ===========================================
+
+### ローカル環境
+GET {{localUrl}}/
+Accept: application/json
+
+### 開発環境（パブリックIP）
+GET {{publicUrl}}/
+Accept: application/json
+
+### 本番環境（ALB経由）
+GET {{serviceUrl}}/
+Accept: application/json
+
+# ===========================================
+# ヘルスチェック
+# ===========================================
+
+### ローカル環境 - ヘルスチェック
+GET {{localUrl}}/health
+Accept: application/json
+
+### 開発環境 - ヘルスチェック
+GET {{publicUrl}}/health
+Accept: application/json
+
+### 本番環境 - ヘルスチェック
+GET {{serviceUrl}}/health
+Accept: application/json
