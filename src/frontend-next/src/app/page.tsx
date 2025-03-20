@@ -15,6 +15,8 @@ async function getData() {
       headers: {
         'Accept': 'application/json',
       },
+      // eslint-disable-next-line no-constant-condition
+      next: isLocalDev ? undefined : { revalidate: 0 },
     });
     
     if (!res.ok) {
